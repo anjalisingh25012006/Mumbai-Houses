@@ -88,7 +88,7 @@ footer{margin-top:24px; font-size:.75rem; color:var(--sub); text-align:center;}
       <p style="font-size:1.05rem; font-weight:600; color:var(--accent); margin:0 0 10px;">Now find your home in one click.</p>
       <p class="lead">Compare average sale prices, price per sqft, and typical area across 86 Mumbai localities.</p>
       <div class="big-search">
-        <input type="text" id="homeSearch" placeholder="Search a locality, e.g. Andheri, Thane, Bandra...">
+        <input type="text" id="homeSearch" list="localityList" autocomplete="off" placeholder="Search a locality, e.g. Andheri, Thane, Bandra...">
         <button class="primary" onclick="goFromHomeSearch()">Search</button>
       </div>
       <div class="chips">
@@ -114,7 +114,8 @@ footer{margin-top:24px; font-size:.75rem; color:var(--sub); text-align:center;}
       <h2>Search &amp; filter</h2>
       <div class="filt-row">
         <label>Locality name</label>
-        <input type="text" id="search" placeholder="e.g. Andheri, Thane...">
+        <input type="text" id="search" list="localityList" autocomplete="off" placeholder="e.g. Andheri, Thane...">
+        <datalist id="localityList"></datalist>
       </div>
       <div class="filt-row">
         <label>BHK</label>
@@ -149,8 +150,6 @@ footer{margin-top:24px; font-size:.75rem; color:var(--sub); text-align:center;}
     <button class="ghost back-btn" onclick="goTo('results')">← Back to Results</button>
     <div class="card" id="detailCard"></div>
   </section>
-
-  <footer>Data: Mumbai House Price Dataset (Kaggle), cleaned &amp; aggregated · Student data visualization project</footer>
 </div>
 
 <script>
@@ -207,7 +206,7 @@ function resetFilters(){
 function goFromHomeSearch(){
   resetFilters();
   const term = document.getElementById('homeSearch').value;
-  state.search = term.toLowerCase();
+  state.search = term;
   document.getElementById('search').value = term;
   goTo('results');
 }
@@ -216,7 +215,7 @@ function quickFilter(type, val){
   if(type==='budget') {
     state.budget = val;
     document.getElementById('budget').value = val;
-    document.getElementById('budgetLabel').textContent = '₹'+(val/100).toFixed(2)+' Cr';
+    document.getElementById('budgetLabel').textContent = budgetText(val);
   }
   if(type==='bhk') {
     state.bhk = val;
@@ -234,7 +233,7 @@ allBtn.onclick=()=>setBhk('all', allBtn);
 bhkBtns.appendChild(allBtn);
 bhkSet.forEach(b=>{
   const btn = document.createElement('button');
-  btn.textContent = b>=5? '5+ BHK' : b+' BHK';
+  btn.textContent = bhkLabel(b);
   btn.onclick=()=>setBhk(b, btn);
   bhkBtns.appendChild(btn);
 });
@@ -245,21 +244,39 @@ function setBhk(b, el){
 }
 document.getElementById('budget').addEventListener('input', e=>{
   state.budget = +e.target.value;
-  document.getElementById('budgetLabel').textContent = state.budget>=500? '₹5 Cr+' : '₹'+(state.budget/100).toFixed(2)+' Cr';
+  document.getElementById('budgetLabel').textContent = budgetText(state.budget);
 });
 document.getElementById('area').addEventListener('input', e=>{
   state.area = +e.target.value;
   document.getElementById('areaLabel').textContent = state.area>=5000? '5000+ sqft' : state.area+' sqft';
 });
-document.getElementById('search').addEventListener('input', e=>{ state.search = e.target.value.toLowerCase(); });
+document.getElementById('search').addEventListener('input', e=>{ state.search = e.target.value; });
+document.getElementById('search').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); goTo('results'); } });
+document.getElementById('homeSearch').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); goFromHomeSearch(); } });
+
+// --- smart name search: ignores case, extra spaces and punctuation; understands old spellings ---
+const budgetText = v => v>=500 ? '₹5 Cr+' : (v<100 ? '₹'+v+' L' : '₹'+(v/100).toFixed(2)+' Cr');
+const norm = t => (t||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const ALIASES = {dombivli:'dombivali', villeparle:'vileparle', nalasopara:'nalasopara', vikroli:'vikhroli', ambarnath:'ambernath', shilphata:'shilphata', taloje:'taloja', bombay:'', navimumbai:''};
+function nameMatches(locality, query){
+  const q = norm(query);
+  if(!q) return true;
+  const l = norm(locality);
+  if(l.includes(q)) return true;
+  for(const k in ALIASES){ const t = ALIASES[k]; if(t && k.includes(q) && l===t) return true; if(t && q.includes(k) && l===t) return true; }
+  return false;
+}
+// suggestions list (proper-case names) for the search boxes
+(function(){ const dl=document.getElementById('localityList'); [...new Set(RAW.map(r=>r.locality))].sort().forEach(n=>{ const o=document.createElement('option'); o.value=n; dl.appendChild(o); }); })();
+function bhkLabel(b, short){ return b===0 ? 'Studio' : (b>=5 ? (short?'5+':'5+ BHK') : (short? b+' BHK' : b+' BHK')); }
 
 // --- results screen ---
 function getFiltered(){
   let rows = state.bhk==='all' ? RAW : RAW.filter(r=>r.bhk_bucket===state.bhk);
   let agg = aggregateLocality(rows);
-  agg = agg.filter(a => a.avg_price <= state.budget*100000);
-  agg = agg.filter(a => a.avg_area <= state.area);
-  if(state.search) agg = agg.filter(a=>a.locality.toLowerCase().includes(state.search));
+  if(state.budget<500) agg = agg.filter(a => a.avg_price <= state.budget*100000);
+  if(state.area<5000) agg = agg.filter(a => a.avg_area <= state.area);
+  if(norm(state.search)) agg = agg.filter(a=>nameMatches(a.locality, state.search));
   agg.sort((a,b)=> a.avg_price - b.avg_price);
   return agg;
 }
@@ -267,9 +284,9 @@ function renderResults(){
   const filtered = getFiltered();
   document.getElementById('resultsHeading').textContent = filtered.length + ' of 86 localities match';
   const parts = [];
-  if(state.search) parts.push(`name contains "${state.search}"`);
-  if(state.bhk!=='all') parts.push((state.bhk>=5?'5+':state.bhk)+' BHK');
-  if(state.budget<500) parts.push('under ₹'+(state.budget/100).toFixed(2)+' Cr');
+  if(norm(state.search)) parts.push(`name contains "${state.search.trim()}"`);
+  if(state.bhk!=='all') parts.push(bhkLabel(state.bhk));
+  if(state.budget<500) parts.push('under '+budgetText(state.budget));
   if(state.area<5000) parts.push('under '+state.area+' sqft');
   document.getElementById('activeFilters').innerHTML = parts.length
     ? 'Filters: '+parts.join(' · ')+' — <a href="#" onclick="resetFilters(); renderResults(); return false;" style="color:var(--accent);">clear all</a>'
@@ -298,13 +315,13 @@ function renderDetails(){
   const card = document.getElementById('detailCard');
   const maxP = Math.max(...rows.map(r=>r.avg_price_per_sqft));
   let bhkRows = rows.slice().sort((a,b)=>a.bhk_bucket-b.bhk_bucket).map(r=>`
-    <tr><td>${r.bhk_bucket>=5?'5+ BHK':r.bhk_bucket+' BHK'}</td>
+    <tr><td>${bhkLabel(r.bhk_bucket)}</td>
       <td>${fmtPrice(r.avg_price)}</td>
       <td>₹${Math.round(r.avg_price_per_sqft).toLocaleString('en-IN')}</td>
       <td>${Math.round(r.avg_area)} sqft</td>
       <td>${r.listings}</td></tr>`).join('');
   let bars = rows.slice().sort((a,b)=>a.bhk_bucket-b.bhk_bucket).map(r=>`
-    <div class="bar-row"><div class="lbl">${r.bhk_bucket>=5?'5+':r.bhk_bucket+' BHK'}</div>
+    <div class="bar-row"><div class="lbl">${bhkLabel(r.bhk_bucket,true)}</div>
       <div class="bar-track"><div class="bar-fill" style="width:${(r.avg_price_per_sqft/maxP*100).toFixed(0)}%"></div></div>
       <div class="val">₹${Math.round(r.avg_price_per_sqft).toLocaleString('en-IN')}/sqft</div></div>`).join('');
 
